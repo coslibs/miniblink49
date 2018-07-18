@@ -3,12 +3,17 @@
 
 #include "wkeWebWindow.h"
 
+extern DWORD g_paintCount;
+extern bool g_isSetDragEnable;
+
 ////////////////////////////////////////////////////////////////////////////
 
 namespace wke {
 
 CWebWindow::CWebWindow()
 {
+    m_state = kWkeWebWindowUninit;
+
     m_originalPaintUpdatedCallback = NULL;
     m_originalPaintUpdatedCallbackParam = NULL;
 
@@ -18,19 +23,12 @@ CWebWindow::CWebWindow()
     m_originalLoadingFinishCallback = NULL;
     m_originalLoadingFinishCallbackParam = NULL;
 
-    m_windowClosingCallback = NULL;
-    m_windowClosingCallbackParam = NULL;
-
-    m_windowDestroyCallback = NULL;
-    m_windowDestroyCallbackParam = NULL;
-
     _initCallbacks();
 }
 
-
 CWebWindow::~CWebWindow()
 {
-
+    destroy();
 }
 
 bool CWebWindow::create(HWND parent, unsigned styles, unsigned styleEx, int x, int y, int width, int height)
@@ -51,14 +49,14 @@ bool CWebWindow::create(HWND parent, wkeWindowType type, int x, int y, int width
         break;
 
     case WKE_WINDOW_TYPE_TRANSPARENT:
-        styles = WS_POPUP;
+        styles = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
         styleEx = WS_EX_LAYERED;
         wkeSetTransparent(this, true);
         break;
 
     case WKE_WINDOW_TYPE_POPUP:
     default:
-        styles = WS_OVERLAPPEDWINDOW;
+        styles = WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
         styleEx = 0;
         wkeSetTransparent(this, false);
     }
@@ -69,7 +67,6 @@ bool CWebWindow::create(HWND parent, wkeWindowType type, int x, int y, int width
 void CWebWindow::destroy()
 {
     _destroyWindow();
-    wkeDestroyWebView(this);
 }
 
 void CWebWindow::onPaintUpdated(wkePaintUpdatedCallback callback, void* callbackParam)
@@ -158,10 +155,12 @@ bool CWebWindow::_createWindow(HWND parent, unsigned styles, unsigned styleEx, i
 
 void CWebWindow::_destroyWindow()
 {
-    KillTimer(m_hWnd, (UINT_PTR)this);
-    RemovePropW(m_hWnd, L"wkeWebWindow");
-    DestroyWindow(m_hWnd);
-    m_hWnd = NULL;
+    if (kWkeWebWindowDestroing == m_state)
+        return;
+    m_state = kWkeWebWindowDestroing;
+
+    ::KillTimer(m_hWnd, (UINT_PTR)this);
+    ::DestroyWindow(m_hWnd); // 这里会重入到本函数
 }
 
 void CWebWindow::_initCallbacks()
@@ -178,43 +177,46 @@ LRESULT CALLBACK CWebWindow::_staticWindowProc(HWND hwnd, UINT message, WPARAM w
         if (message == WM_CREATE) {
             LPCREATESTRUCTW cs = (LPCREATESTRUCTW)lParam;
             pthis = (CWebWindow*)cs->lpCreateParams;
-			((CWebWindow*)cs->lpCreateParams)->setHandle(hwnd);
-            SetPropW(hwnd, L"wkeWebWindow", (HANDLE)pthis);
+            ((CWebWindow*)cs->lpCreateParams)->setHandle(hwnd);
+            pthis->m_state = kWkeWebWindowInit;
+            ::SetPropW(hwnd, L"wkeWebWindow", (HANDLE)pthis);
         }
     }
 
     if (pthis)
         return pthis->_windowProc(hwnd, message, wParam, lParam);
     else
-        return DefWindowProcW(hwnd, message, wParam, lParam);
+        return ::DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch(message) {
+    case WM_NCPAINT:
+        break;
+
+    case WM_ERASEBKGND:
+        break;
+
     case WM_CREATE:
-        DragAcceptFiles(hwnd, TRUE);
-        SetTimer(hwnd, (UINT_PTR)this, 70, NULL);
+        ::DragAcceptFiles(hwnd, TRUE);
+        SetTimer(hwnd, (UINT_PTR)this, 20, NULL);
         return 0;
 
     case WM_CLOSE:
-        if (m_windowClosingCallback) {
-            if (!m_windowClosingCallback(this, m_windowClosingCallbackParam))
+        if (getWkeHandler()->windowClosingCallback) {
+            if (!getWkeHandler()->windowClosingCallback(this, getWkeHandler()->windowClosingCallbackParam))
                 return 0;
         }
 
-        ShowWindow(hwnd, SW_HIDE);
-        DestroyWindow(hwnd);
+        ::ShowWindow(hwnd, SW_HIDE);
+        ::DestroyWindow(hwnd);
         return 0;
 
-    case WM_DESTROY:
-        KillTimer(hwnd, (UINT_PTR)this);
-        RemovePropW(hwnd, L"wkeWebWindow");
+    case WM_NCDESTROY:
+        ::KillTimer(hwnd, (UINT_PTR)this);
+        ::RemovePropW(hwnd, L"wkeWebWindow");
         m_hWnd = NULL;
-
-        if (m_windowDestroyCallback)
-            m_windowDestroyCallback(this, m_windowDestroyCallbackParam);
-
         wkeDestroyWebView(this);
         return 0;
 
@@ -227,16 +229,16 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             wkeRepaintIfNeeded(this);
 
             PAINTSTRUCT ps = { 0 };
-            HDC hdc = BeginPaint(hwnd, &ps);
+            HDC hdc = ::BeginPaint(hwnd, &ps);
 
             RECT rcClip = ps.rcPaint;
 
             RECT rcClient;
-            GetClientRect(hwnd, &rcClient);
+            ::GetClientRect(hwnd, &rcClient);
 
             RECT rcInvalid = rcClient;
             if (rcClip.right != rcClip.left && rcClip.bottom != rcClip.top)
-                IntersectRect(&rcInvalid, &rcClip, &rcClient);
+                ::IntersectRect(&rcInvalid, &rcClip, &rcClient);
 
             int srcX = rcInvalid.left - rcClient.left;
             int srcY = rcInvalid.top - rcClient.top;
@@ -246,18 +248,15 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             int height = rcInvalid.bottom - rcInvalid.top;
 
             if (0 != width && 0 != height)
-                BitBlt(hdc, destX, destY, width, height, wkeGetViewDC(this), srcX, srcY, SRCCOPY); 
+                ::BitBlt(hdc, destX, destY, width, height, wkeGetViewDC(this), srcX, srcY, SRCCOPY);
 
-            EndPaint(hwnd, &ps);
+            ::EndPaint(hwnd, &ps);
         }
         break;
 
-    case WM_ERASEBKGND:
-        return TRUE;
-
     case WM_SIZE: {
         RECT rc = { 0 };
-        GetClientRect(hwnd, &rc);
+        ::GetClientRect(hwnd, &rc);
         int width = rc.right - rc.left;
         int height = rc.bottom - rc.top;
 
@@ -266,26 +265,27 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
         return 0;
     }
-    case WM_DROPFILES: {
-        Vector<wchar_t> szFile;
-        szFile.resize(2 * MAX_PATH);
-        memset(szFile.data(), 0, sizeof(wchar_t) * 2 * (MAX_PATH));
+    case WM_DROPFILES:
+        if (g_isSetDragEnable) {
+            Vector<wchar_t> szFile;
+            szFile.resize(2 * MAX_PATH);
+            memset(szFile.data(), 0, sizeof(wchar_t) * 2 * (MAX_PATH));
         
-        wcscpy(szFile.data(), L"file:///");
+            wcscpy(szFile.data(), L"file:///");
 
-        HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+            HDROP hDrop = reinterpret_cast<HDROP>(wParam);
 
-        UINT uFilesCount = DragQueryFileW(hDrop, 0xFFFFFFFF, szFile.data(), MAX_PATH);
-        if (uFilesCount != 0) {
-            UINT uRet = DragQueryFileW(hDrop, 0, (wchar_t*)szFile.data() + 8, MAX_PATH);
-            if (uRet != 0) {
-                wkeLoadURLW(this, szFile.data());
-                SetWindowTextW(hwnd, szFile.data());
+            UINT uFilesCount = ::DragQueryFileW(hDrop, 0xFFFFFFFF, szFile.data(), MAX_PATH);
+            if (uFilesCount != 0) {
+                UINT uRet = ::DragQueryFileW(hDrop, 0, (wchar_t*)szFile.data() + 8, MAX_PATH);
+                if (uRet != 0) {
+                    wkeLoadURLW(this, szFile.data());
+                    ::SetWindowTextW(hwnd, szFile.data());
+                }
             }
+            ::DragFinish(hDrop);
         }
-        DragFinish(hDrop);
         return 0;
-    }
     //case WM_NCHITTEST:
     //    if (IsWindow(m_hWnd) && flagsOff(GetWindowLong(m_hWnd, GWL_STYLE), WS_CAPTION))
     //    {
@@ -441,8 +441,9 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     case WM_RBUTTONUP:
     case WM_MOUSEMOVE: {
         if (message == WM_LBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_RBUTTONDOWN) {
-            SetFocus(hwnd);
-            SetCapture(hwnd);
+            if (::GetFocus() != hwnd)
+                ::SetFocus(hwnd);
+            ::SetCapture(hwnd);
         }
         else if (message == WM_LBUTTONUP || message == WM_MBUTTONUP || message == WM_RBUTTONUP) {
             ReleaseCapture();
@@ -499,7 +500,7 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         POINT pt;
         pt.x = LOWORD(lParam);
         pt.y = HIWORD(lParam);
-        ScreenToClient(hwnd, &pt);
+        ::ScreenToClient(hwnd, &pt);
 
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
 
@@ -535,21 +536,21 @@ LRESULT CWebWindow::_windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         break;
 
     case WM_IME_STARTCOMPOSITION: {
-            wkeRect caret = wkeGetCaretRect(this);
+        wkeRect caret = wkeGetCaretRect(this);
 
-			COMPOSITIONFORM COMPOSITIONFORM;
-			COMPOSITIONFORM.dwStyle = CFS_POINT | CFS_FORCE_POSITION;
-			COMPOSITIONFORM.ptCurrentPos.x = caret.x;
-			COMPOSITIONFORM.ptCurrentPos.y = caret.y;
+        COMPOSITIONFORM COMPOSITIONFORM;
+        COMPOSITIONFORM.dwStyle = CFS_POINT | CFS_FORCE_POSITION;
+        COMPOSITIONFORM.ptCurrentPos.x = caret.x;
+        COMPOSITIONFORM.ptCurrentPos.y = caret.y;
 
-			HIMC hIMC = ImmGetContext(hwnd);
-			ImmSetCompositionWindow(hIMC, &COMPOSITIONFORM);
-			ImmReleaseContext(hwnd, hIMC);
+        HIMC hIMC = ::ImmGetContext(hwnd);
+        ::ImmSetCompositionWindow(hIMC, &COMPOSITIONFORM);
+        ::ImmReleaseContext(hwnd, hIMC);
     }
         return 0;
     }
 
-    return DefWindowProcW(hwnd, message, wParam, lParam);
+    return ::DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 void CWebWindow::_staticOnPaintUpdated(wkeWebView webView, void* param, const HDC hdc, int x, int y, int cx, int cy)
@@ -560,36 +561,50 @@ void CWebWindow::_staticOnPaintUpdated(wkeWebView webView, void* param, const HD
 
 void CWebWindow::_onPaintUpdated(const HDC hdc, int x, int y, int cx, int cy)
 {
-    if (WS_EX_LAYERED == (WS_EX_LAYERED & GetWindowLong(m_hWnd, GWL_EXSTYLE))) {
-        RECT rectDest;
-        GetWindowRect(m_hWnd, &rectDest);
-
-        SIZE sizeDest = { rectDest.right - rectDest.left, rectDest.bottom - rectDest.top };
-        POINT pointDest = { rectDest.left, rectDest.top };
-        POINT pointSource = { 0, 0 };
-
-        HDC hdcScreen = GetDC(NULL);
-        //HDC hdcMemory = CreateCompatibleDC(hdcScreen);
-        //HBITMAP hbmpMemory = CreateCompatibleBitmap(hdcScreen, sizeDest.cx, sizeDest.cy);
-        //HBITMAP hbmpOld = (HBITMAP)SelectObject(hdcMemory, hbmpMemory);
-        //BitBlt(hdcMemory, 0, 0, sizeDest.cx, sizeDest.cy, wkeGetViewDC(this), 0, 0, SRCCOPY);
-
-        BLENDFUNCTION blend = { 0 };
-        memset(&blend, 0, sizeof(blend));
-        blend.BlendOp = AC_SRC_OVER;
-        blend.SourceConstantAlpha = 255;
-        blend.AlphaFormat = AC_SRC_ALPHA;
-        UpdateLayeredWindow(m_hWnd, hdcScreen, &pointDest, &sizeDest, wkeGetViewDC(this), &pointSource, RGB(0,0,0), &blend, ULW_ALPHA);
-
-        //SelectObject(hdcMemory, (HGDIOBJ)hbmpOld);
-        //DeleteObject((HGDIOBJ)hbmpMemory);
-        //DeleteDC(hdcMemory);
-
-        ReleaseDC(NULL, hdcScreen);
-    } else {
-        RECT rc = {x, y, x + cx, y + cy};
-        BOOL b = InvalidateRect(m_hWnd, &rc, TRUE);
-    }
+//     BOOL callOk = FALSE;
+//     if (WS_EX_LAYERED == (WS_EX_LAYERED & GetWindowLong(m_hWnd, GWL_EXSTYLE))) {
+//         RECT rectDest;
+//         ::GetWindowRect(m_hWnd, &rectDest);
+// 
+//         SIZE sizeDest = { rectDest.right - rectDest.left, rectDest.bottom - rectDest.top };
+//         POINT pointDest = { 0, 0 }; // { rectDest.left, rectDest.top };
+//         POINT pointSource = { 0, 0 };
+// 
+//         BITMAP bmp = { 0 };
+//         HBITMAP hBmp = (HBITMAP)::GetCurrentObject(hdc, OBJ_BITMAP);
+//         ::GetObject(hBmp, sizeof(BITMAP), (LPSTR)&bmp);
+// 
+//         sizeDest.cx = bmp.bmWidth;
+//         sizeDest.cy = bmp.bmHeight;
+// 
+//         HDC hdcScreen = GetDC(m_hWnd);
+// 
+//         BLENDFUNCTION blend = { 0 };
+//         blend.BlendOp = AC_SRC_OVER;
+//         blend.SourceConstantAlpha = 255;
+//         blend.AlphaFormat = AC_SRC_ALPHA;
+//         callOk = ::UpdateLayeredWindow(m_hWnd, hdcScreen, nullptr, &sizeDest, hdc, &pointSource, RGB(0xFF, 0xFF, 0xFF), &blend, ULW_ALPHA);
+//         if (!callOk) {
+//             HDC hdcMemory = ::CreateCompatibleDC(hdcScreen);
+//             HBITMAP hbmpMemory = ::CreateCompatibleBitmap(hdcScreen, sizeDest.cx, sizeDest.cy);
+//             HBITMAP hbmpOld = (HBITMAP)::SelectObject(hdcMemory, hbmpMemory);
+// 
+//             ::BitBlt(hdcMemory, 0, 0, sizeDest.cx, sizeDest.cy, hdc, 0, 0, SRCCOPY | CAPTUREBLT);
+// 
+//             ::BitBlt(hdc, 0, 0, sizeDest.cx, sizeDest.cy, hdcMemory, 0, 0, SRCCOPY | CAPTUREBLT); //!
+// 
+//             callOk = ::UpdateLayeredWindow(m_hWnd, hdcScreen, nullptr, &sizeDest, hdcMemory, &pointSource, RGB(0xFF, 0xFF, 0xFF), &blend, ULW_ALPHA);
+// 
+//             ::SelectObject(hdcMemory, (HGDIOBJ)hbmpOld);
+//             ::DeleteObject((HGDIOBJ)hbmpMemory);
+//             ::DeleteDC(hdcMemory);
+//         }
+// 
+//         ::ReleaseDC(m_hWnd, hdcScreen);
+//     } else {
+//         RECT rc = {x, y, x + cx, y + cy};
+//         callOk = ::InvalidateRect(m_hWnd, &rc, TRUE);
+//     }
 
     if (m_originalPaintUpdatedCallback)
         m_originalPaintUpdatedCallback(this, m_originalPaintUpdatedCallbackParam, hdc, x, y, cx, cy);
@@ -621,48 +636,53 @@ void CWebWindow::_onDocumentReady()
 
 void CWebWindow::onClosing(wkeWindowClosingCallback callback, void* param)
 {
-    m_windowClosingCallback = callback;
-    m_windowClosingCallbackParam = param;
+    getWkeHandler()->windowClosingCallback = callback;
+    getWkeHandler()->windowClosingCallbackParam = param;
 }
 
 void CWebWindow::onDestroy(wkeWindowDestroyCallback callback, void* param)
 {
-    m_windowDestroyCallback = callback;
-    m_windowDestroyCallbackParam = param;
+    getWkeHandler()->windowDestroyCallback = callback;
+    getWkeHandler()->windowDestroyCallbackParam = param;
 }
 
 void CWebWindow::show(bool b)
 {
-    ShowWindow(m_hWnd, b ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(m_hWnd, b ? SW_SHOW : SW_HIDE);
 }
 
 void CWebWindow::enable(bool b)
 {
-    EnableWindow(m_hWnd, b ? TRUE : FALSE);
+    ::EnableWindow(m_hWnd, b ? TRUE : FALSE);
 }
 
 void CWebWindow::move(int x, int y, int width, int height)
 {
-    MoveWindow(m_hWnd, x, y, width, height, FALSE);
+    ::MoveWindow(m_hWnd, x, y, width, height, FALSE);
 }
 
 void CWebWindow::resize(int width, int height)
 {
+    if (0 >= width || 0 >= height)
+        return;
+
     POINT point = { 0 };
-    {
-        RECT rect = { 0 };
-        GetWindowRect(m_hWnd, &rect);
-        point.x = rect.left;
-        point.y = rect.top;
+    
+    RECT rect = { 0 };
+    ::GetWindowRect(m_hWnd, &rect);
+    point.x = rect.left;
+    point.y = rect.top;
+    
+    DWORD style = ::GetWindowLong(m_hWnd, GWL_STYLE);
+    style &= WS_CHILD;
+    if (0 != style) {
+        HWND parent = ::GetParent(m_hWnd);
+        ::ScreenToClient(parent, &point);
     }
 
-    if (WS_CHILD == GetWindowLong(m_hWnd, GWL_STYLE))
-    {
-        HWND parent = GetParent(m_hWnd);
-        ScreenToClient(parent, &point);
-    }
+    ::MoveWindow(m_hWnd, point.x, point.y, width, height, FALSE);
+    //::SetWindowPos(m_hWnd, NULL, 0, 0, width, height, SWP_NOZORDER | SWP_NOMOVE);
 
-    MoveWindow(m_hWnd, point.x, point.y, width, height, FALSE);
     CWebView::resize(width, height);
 }
 
@@ -678,26 +698,26 @@ void CWebWindow::moveToCenter()
 
     int parentWidth = 0;
     int parentHeight = 0;
-    if (WS_CHILD == GetWindowLong(m_hWnd, GWL_STYLE)) {
-        HWND parent = GetParent(m_hWnd);
+    if (WS_CHILD == ::GetWindowLong(m_hWnd, GWL_STYLE)) {
+        HWND parent = ::GetParent(m_hWnd);
         RECT rect = { 0 };
-        GetClientRect(parent, &rect);
+        ::GetClientRect(parent, &rect);
         parentWidth = rect.right - rect.left;
         parentHeight = rect.bottom - rect.top;
     } else {
-        parentWidth = GetSystemMetrics(SM_CXSCREEN);
-        parentHeight = GetSystemMetrics(SM_CYSCREEN);
+        parentWidth = ::GetSystemMetrics(SM_CXSCREEN);
+        parentHeight = ::GetSystemMetrics(SM_CYSCREEN);
     }
 
     int x = (parentWidth - width) / 2;
     int y = (parentHeight - height) / 2;
 
-    MoveWindow(m_hWnd, x, y, width, height, FALSE);
+    ::MoveWindow(m_hWnd, x, y, width, height, FALSE);
 }
 
 void CWebWindow::setTitle(const wchar_t* text)
 {
-    SetWindowTextW(m_hWnd, text);
+    ::SetWindowTextW(m_hWnd, text);
 }
 
 void CWebWindow::setTitle(const utf8* text)
@@ -705,6 +725,15 @@ void CWebWindow::setTitle(const utf8* text)
     wchar_t wtext[1024 * 64 + 1] = { 0 };
     MultiByteToWideChar(CP_UTF8, 0, text, strlen(text), wtext, 1024*64);
     setTitle(wtext);
+}
+
+void CWebWindow::setTransparent(bool transparent)
+{
+    DWORD style = ::GetWindowLong(m_hWnd, GWL_EXSTYLE);
+    SetWindowLongW(m_hWnd, GWL_EXSTYLE, (!transparent) ? (~WS_EX_LAYERED & style) : (WS_EX_LAYERED | style));
+    ::UpdateWindow(m_hWnd);
+
+    CWebView::setTransparent(transparent);
 }
 
 } // namespace wke

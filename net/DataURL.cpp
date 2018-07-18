@@ -38,6 +38,7 @@
 #include "third_party/WebKit/Source/platform/network/HTTPParsers.h"
 #include "third_party/WebKit/Source/platform/MIMETypeRegistry.h"
 #include "third_party/WebKit/public/platform/WebURLResponse.h"
+#include "wtf/text/WTFStringUtil.h"
 
 namespace net {
 
@@ -133,7 +134,7 @@ void handleDataURL(blink::WebURLLoader* handle, blink::WebURLLoaderClient* clien
 bool parseDataURL(const blink::KURL& kurl, String& mimeType, String& charset, Vector<char>& out)
 {
     out.clear();
-    String url = kurl.string();
+    String url = WTF::ensureStringToUTF8String(kurl.string());
 
     int index = url.find(',');
     if (index == -1)
@@ -157,14 +158,14 @@ bool parseDataURL(const blink::KURL& kurl, String& mimeType, String& charset, Ve
 
     int64_t totalEncodedDataLength = 0;
     if (base64) {
-        data = blink::decodeURLEscapeSequences(data);
+        data = WTF::ensureStringToUTF8String(blink::decodeURLEscapeSequences(data));
         if (!(WTF::base64Decode(data, out, WTF::isSpaceOrNewline) && out.size() > 0))
             return false;
         
         totalEncodedDataLength = out.size();
     } else {
         WTF::TextEncoding encoding(charset);
-        data = blink::decodeURLEscapeSequences(data, encoding);
+        data = WTF::ensureStringToUTF8String(blink::decodeURLEscapeSequences(data, encoding));
 
         WTF::CString encodedData = encoding.encode(data, WTF::URLEncodedEntitiesForUnencodables);
         if (0 == encodedData.length())

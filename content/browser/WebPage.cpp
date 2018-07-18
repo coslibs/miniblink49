@@ -16,6 +16,8 @@
 #endif
 #include "content/browser/WebPage.h"
 #include "content/browser/WebPageImpl.h"
+#include "content/devtools/DevToolsClient.h"
+#include "content/devtools/DevToolsAgent.h"
 
 extern WCHAR szTitle[];
 extern WCHAR szWindowClass[];
@@ -43,6 +45,7 @@ void WebPage::shutdown()
         delete *it;
     }
     delete m_webPageSet;
+    m_webPageSet = nullptr;
 }
 
 WebPage::WebPage(void* foreignPtr)
@@ -87,10 +90,10 @@ void WebPage::setViewportSize(const IntSize& size)
     m_pageImpl->setViewportSize(size);
 }
 
-// LocalFrame* WebPage::localFrame()
-// {
-//     return m_pageImpl->m_webViewImpl->mainFrameImpl()->frame();
-// }
+void WebPage::setNeedAutoDrawToHwnd(bool b)
+{
+    m_pageImpl->n_needAutoDrawToHwnd = b;
+}
 
 IntRect WebPage::caretRect()
 {
@@ -103,6 +106,12 @@ IntRect WebPage::caretRect()
 void WebPage::setIsDraggableRegionNcHitTest()
 {
     //m_pageImpl->m_isDraggableRegionNcHitTest = true;
+}
+
+void WebPage::setDrawMinInterval(double drawMinInterval)
+{
+    if (m_pageImpl)
+        m_pageImpl->setDrawMinInterval(drawMinInterval);
 }
 
 void WebPage::setNeedsCommit()
@@ -146,6 +155,36 @@ void WebPage::paintToBit(void* bits, int pitch)
 {
     if (m_pageImpl)
         m_pageImpl->paintToBit(bits, pitch);
+}
+
+void WebPage::disablePaint()
+{
+    if (m_pageImpl)
+        m_pageImpl->disablePaint();
+}
+
+void WebPage::enablePaint()
+{
+    if (m_pageImpl)
+        m_pageImpl->enablePaint();
+}
+
+void WebPage::willEnterDebugLoop()
+{
+    if (m_pageImpl)
+        m_pageImpl->willEnterDebugLoop();
+}
+
+void WebPage::didExitDebugLoop()
+{
+    if (m_pageImpl)
+        m_pageImpl->didExitDebugLoop();
+}
+
+void WebPage::didStartProvisionalLoad()
+{
+    if (m_pageImpl)
+        m_pageImpl->didStartProvisionalLoad();
 }
 
 bool WebPage::fireTimerEvent()
@@ -261,14 +300,14 @@ HWND WebPage::getHWND() const
 
 void WebPage::setHWND(HWND hwnd)
 {
-	if (m_pageImpl)
-		m_pageImpl->m_hWnd = hwnd;
+    if (m_pageImpl)
+        m_pageImpl->setHWND(hwnd);
 }
 
 void WebPage::setHwndRenderOffset(const blink::IntPoint& offset)
 {
-	if (m_pageImpl)
-		m_pageImpl->m_hwndRenderOffset = offset;
+    if (m_pageImpl)
+        m_pageImpl->m_hwndRenderOffset = offset;
 }
 
 blink::IntPoint WebPage::getHwndRenderOffset() const
@@ -401,10 +440,42 @@ void WebPage::goForward()
         m_pageImpl->navigateBackForwardSoon(1);
 }
 
-void WebPage::didCommitProvisionalLoad(blink::WebLocalFrame* frame, const blink::WebHistoryItem& history, blink::WebHistoryCommitType type)
+void WebPage::goToOffset(int offset)
 {
     if (m_pageImpl)
-        m_pageImpl->didCommitProvisionalLoad(frame, history, type);
+        m_pageImpl->navigateBackForwardSoon(offset);
+}
+
+void WebPage::goToIndex(int index)
+{
+    if (m_pageImpl)
+        m_pageImpl->navigateToIndex(index);
+}
+
+void WebPage::didCommitProvisionalLoad(blink::WebLocalFrame* frame, const blink::WebHistoryItem& history, 
+    blink::WebHistoryCommitType type, bool isSameDocument)
+{
+    if (m_pageImpl)
+        m_pageImpl->didCommitProvisionalLoad(frame, history, type, isSameDocument);
+}
+
+void WebPage::setTransparent(bool transparent)
+{
+    if (m_pageImpl)
+        m_pageImpl->setTransparent(transparent);
+}
+
+void WebPage::setScreenInfo(const blink::WebScreenInfo& info)
+{
+    if (m_pageImpl)
+        m_pageImpl->setScreenInfo(info);
+}
+
+blink::WebScreenInfo WebPage::screenInfo()
+{
+    if (m_pageImpl)
+        return m_pageImpl->screenInfo();
+    return blink::WebScreenInfo();
 }
 
 WebPage* WebPage::getSelfForCurrentContext()
@@ -441,11 +512,70 @@ WebFrameClientImpl* WebPage::webFrameClientImpl()
     return m_pageImpl->m_webFrameClient;
 }
 
-WebFrame* WebPage::getWebFrameFromFrameId(int64 frameId)
+WebFrame* WebPage::getWebFrameFromFrameId(int64_t frameId)
 {
     if (!m_pageImpl)
         return nullptr;
     return m_pageImpl->getWebFrameFromFrameId(frameId);
+}
+
+int64_t WebPage::getFrameIdByBlinkFrame(const blink::WebFrame* frame)
+{
+    if (!m_pageImpl)
+        return content::WebPage::kInvalidFrameId;
+    return m_pageImpl->getFrameIdByBlinkFrame(frame);
+}
+
+int64_t WebPage::getFirstFrameId()
+{
+    return WebPageImpl::getFirstFrameId();
+}
+
+void WebPage::gcAll()
+{
+    if (!m_webPageSet)
+        return;
+
+    WTF::HashSet<WebPage*> webPageSet = *m_webPageSet;
+    for (WTF::HashSet<WebPage*>::iterator it = webPageSet.begin(); it != webPageSet.end(); ++it) {
+        WebPage* page = *it;
+        page->gc();
+    }
+}
+
+void WebPage::gc()
+{
+    if (!m_pageImpl)
+        return;
+    return m_pageImpl->gc();
+}
+
+void WebPage::onDocumentReady()
+{
+    if (m_pageImpl->m_devToolsClient)
+        m_pageImpl->m_devToolsClient->onDocumentReady();
+}
+
+void WebPage::connetDevTools(WebPage* frontEnd, WebPage* embedder)
+{
+    DevToolsAgent* devToolsAgent = embedder->m_pageImpl->createOrGetDevToolsAgent();
+    DevToolsClient* devToolsClient = frontEnd->m_pageImpl->createOrGetDevToolsClient();
+
+    devToolsAgent->setDevToolsClient(devToolsClient);
+    devToolsClient->setDevToolsAgent(devToolsAgent);
+}
+
+bool WebPage::isDevtoolsConneted() const
+{
+    if (!m_pageImpl->m_devToolsAgent)
+        return false;
+    return m_pageImpl->m_devToolsAgent->isDevToolsClientConnet();
+}
+
+void WebPage::inspectElementAt(int x, int y)
+{
+    if (m_pageImpl->m_devToolsAgent)
+        m_pageImpl->m_devToolsAgent->inspectElementAt(x, y);
 }
 
 } // namespace WebCore

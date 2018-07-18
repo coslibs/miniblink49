@@ -770,6 +770,9 @@ bool FrameLoader::prepareRequestForThisFrame(FrameLoadRequest& request)
 
 static bool shouldOpenInNewWindow(Frame* targetFrame, const FrameLoadRequest& request, NavigationPolicy policy)
 {
+    if (!RuntimeEnabledFeatures::navigationToNewWindowEnabled())
+        return false;
+
     if (!targetFrame && !request.frameName().isEmpty())
         return true;
     // FIXME: This case is a workaround for the fact that ctrl+clicking a form submission incorrectly

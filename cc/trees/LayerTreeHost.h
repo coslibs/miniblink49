@@ -1,18 +1,17 @@
 #ifndef LayerTreeHost_h
 #define LayerTreeHost_h
 
-#include "cc/trees/LayerTreeHost.h"
 #include "third_party/WebKit/public/platform/WebLayerTreeView.h"
 #include "third_party/WebKit/Source/platform/geometry/IntRect.h"
 #include "third_party/WebKit/Source/platform/geometry/IntSize.h"
-#include "wtf/HashMap.h"
-#include "wtf/Vector.h"
-#include "wtf/ThreadingPrimitives.h"
-#include <set>
+#include "third_party/WebKit/Source/wtf/HashMap.h"
+#include "third_party/WebKit/Source/wtf/Vector.h"
+#include "third_party/WebKit/Source/wtf/ThreadingPrimitives.h"
+#include "third_party/WebKit/Source/wtf/HashSet.h"
+#include "third_party/skia/include/core/SkRect.h"
 
 namespace blink {
 class WebViewClient;
-class WebPageImpl;
 class WebGestureCurveTarget;
 class IntRect;
 struct WebFloatSize;
@@ -41,6 +40,7 @@ class TileGrid;
 class LayerChangeAction;
 class CompositingLayer;
 class ActionsFrameGroup;
+class LayerTreeHostClent;
 
 class LayerTreeHostUiThreadClient {
 public:
@@ -49,30 +49,33 @@ public:
 
 class LayerTreeHost : public blink::WebLayerTreeView {
 public:
-    LayerTreeHost(blink::WebViewClient* webViewClient, LayerTreeHostUiThreadClient* uiThreadClient);
+    LayerTreeHost(LayerTreeHostClent* hostClient, LayerTreeHostUiThreadClient* uiThreadClient);
     ~LayerTreeHost();
 
     void registerLayer(cc_blink::WebLayerImpl* layer);
     void unregisterLayer(cc_blink::WebLayerImpl* layer);
     cc_blink::WebLayerImpl* getLayerById(int id);
 
+    void gc();
+
     bool isDestroying() const;
 
-    void updateLayers(SkCanvas* canvas, const blink::IntRect& clip, bool needsFullTreeSync);
+    //void updateLayers(SkCanvas* canvas, const blink::IntRect& clip, bool needsFullTreeSync);
     void recordDraw();
-    void drawToCanvas(SkCanvas* canvas, const blink::IntRect& clip);
+    void drawToCanvas(SkCanvas* canvas, const SkRect& clip);
     void updateLayersDrawProperties();
 
-    void setNeedsCommit();
-    void setNeedsFullTreeSync();
+    //void setNeedsCommit();
+    //void setNeedsFullTreeSync();
+    //void didUpdateLayout();
 
     void requestRepaint(const blink::IntRect& repaintRect);
 
     // 从光栅化线程发出，通知渲染新的一帧。当然也可能从主线程发出，如果没有光栅化，但又有滚动等情况
     void requestDrawFrameLocked(DirtyLayers* dirtyLayers, Vector<Tile*>* tilesToUIThreadRelease);
     bool preDrawFrame();
-	void postDrawFrame();
-	bool applyActions(bool needCheck);
+    void postDrawFrame();
+    bool applyActions(bool needCheck);
 
     void scrollBy(const blink::WebFloatSize& delta, const blink::WebFloatSize& velocity);
 
@@ -82,40 +85,42 @@ public:
     // WebLayerTreeView
     
     // Sets the root of the tree. The root is set by way of the constructor.
-    virtual void setRootLayer(const blink::WebLayer&) OVERRIDE;
+    virtual void setRootLayer(const blink::WebLayer&) override;
     CompositingLayer* getRootCCLayer();
-    virtual void clearRootLayer() OVERRIDE;
-    virtual void setViewportSize(const blink::WebSize& deviceViewportSize) OVERRIDE;
+    virtual void clearRootLayer() override;
+    virtual void setViewportSize(const blink::WebSize& deviceViewportSize) override;
 
     // Gives the viewport size in physical device pixels.
-    virtual blink::WebSize deviceViewportSize() const OVERRIDE;
+    virtual blink::WebSize deviceViewportSize() const override;
 
-    virtual void setDeviceScaleFactor(float) OVERRIDE;
-    virtual float deviceScaleFactor() const OVERRIDE;
+    virtual void setDeviceScaleFactor(float) override;
+    virtual float deviceScaleFactor() const override;
 
     // Sets the background color for the viewport.
-    virtual void setBackgroundColor(blink::WebColor) OVERRIDE;
+    virtual void setBackgroundColor(blink::WebColor) override;
+    blink::WebColor getBackgroundColor() const;
 
     // Sets the background transparency for the viewport. The default is 'false'.
-    virtual void setHasTransparentBackground(bool) OVERRIDE;
+    virtual void setHasTransparentBackground(bool) override;
+    bool getHasTransparentBackground() const;
 
-	virtual void registerForAnimations(blink::WebLayer* layer) OVERRIDE;
+    virtual void registerForAnimations(blink::WebLayer* layer) override;
 
     // Sets whether this view is visible. In threaded mode, a view that is not visible will not
     // composite or trigger updateAnimations() or layout() calls until it becomes visible.
-    virtual void setVisible(bool) OVERRIDE;
+    virtual void setVisible(bool) override;
 
     // Sets the current page scale factor and minimum / maximum limits. Both limits are initially 1 (no page scale allowed).
-    virtual void setPageScaleFactorAndLimits(float pageScaleFactor, float minimum, float maximum) OVERRIDE;
+    virtual void setPageScaleFactorAndLimits(float pageScaleFactor, float minimum, float maximum) override;
 
     // Starts an animation of the page scale to a target scale factor and scroll offset.
     // If useAnchor is true, destination is a point on the screen that will remain fixed for the duration of the animation.
     // If useAnchor is false, destination is the final top-left scroll position.
-    virtual void startPageScaleAnimation(const blink::WebPoint& destination, bool useAnchor, float newPageScale, double durationSec) OVERRIDE;
+    virtual void startPageScaleAnimation(const blink::WebPoint& destination, bool useAnchor, float newPageScale, double durationSec) override;
 
-    virtual void setNeedsAnimate() OVERRIDE;
+    virtual void setNeedsAnimate() override;
 
-    virtual void finishAllRendering() OVERRIDE;
+    virtual void finishAllRendering() override;
 
     void showDebug();
 
@@ -137,7 +142,8 @@ public:
     int64 frontRasteringIndex();
     void popRasteringIndex();
 
-    void beginRecordActions();
+    bool canRecordActions() const;
+    void beginRecordActions(bool isComefromMainframe);
     void endRecordActions();
 
     int64 genActionId();
@@ -145,38 +151,62 @@ public:
     void registerCCLayer(CompositingLayer* layer);
     void unregisterCCLayer(CompositingLayer* layer);
     CompositingLayer* getCCLayerById(int id);
-	bool isRootCCLayerEmpty() const { return !m_rootCCLayer; }
+    bool isRootCCLayerEmpty() const { return !m_rootCCLayer; }
 
     SkCanvas* getMemoryCanvasLocked();
     void releaseMemoryCanvasLocked();
 
     bool isDrawDirty();
     void paintToBit(void* bits, int pitch);
+
+    struct BitInfo {
+        uint32_t* pixels;
+        SkCanvas* tempCanvas;
+        int width;
+        int height;
+    };
+    BitInfo* getBitBegin();
+    void getBitEnd(const BitInfo* bitInfo);
+
     void requestDrawFrameToRunIntoCompositeThread();
     void requestApplyActionsToRunIntoCompositeThread(bool needCheck);
-    void setUseLayeredBuffer(bool b);
-    static void clearCanvas(SkCanvas* canvas, const blink::IntRect& rect, bool useLayeredBuffer);
+    //void setUseLayeredBuffer(bool b);
+    //bool getIsUseLayeredBuffer() const { return m_useLayeredBuffer; }
+    static void clearCanvas(SkCanvas* canvas, const SkRect& rect, bool useLayeredBuffer);
+
+    void setDrawMinInterval(double drawMinInterval);
     
-    void postPaintMessage(const blink::IntRect& paintRect);
+    void postPaintMessage(const SkRect& paintRect);
     void firePaintEvent(HDC hdc, const RECT* paintRect);
     blink::IntRect getClientRect();
 
+    void setLayerTreeDirty();
+    bool isLayerTreeDirty() const;
+
+    void disablePaint();
+    void enablePaint();
+
+    cc_blink::WebLayerImpl* getRootLayer() { return m_rootLayer; }
+    const cc_blink::WebLayerImpl* getConstRootLayer() { return m_rootLayer; }
+
+    void appendPendingRepaintRect(const SkRect& r);
+
 private:
-    void applyActionsInCompositeThread(bool needCheck);
+    void requestPaintToMemoryCanvasToUiThread(const SkRect& r);
+    void onApplyActionsInCompositeThread(bool needCheck);
+    void waitForApplyActions();
     void drawFrameInCompositeThread();
-    void paintToMemoryCanvasInUiThread(const blink::IntRect& paintRect);
-    void paintToMemoryCanvas(const blink::IntRect& r);
-    //void drawDebugLine(SkCanvas* memoryCanvas, const blink::IntRect& paintRect);
-    //void drawToCanvas(const IntRect& dirtyRect, skia::PlatformCanvas* canvas);
+    void paintToMemoryCanvasInUiThread(const SkRect& paintRect);
+    void paintToMemoryCanvas(const SkRect& r);
     
     bool m_isDestroying;
 
-    blink::WebViewClient* m_webViewClient;
+    LayerTreeHostClent* m_hostClient;
     LayerTreeHostUiThreadClient* m_uiThreadClient;
     blink::WebGestureCurveTarget * m_webGestureCurveTarget;
 
-	cc_blink::WebLayerImpl* m_rootLayer;
-	CompositingLayer* m_rootCCLayer;
+    cc_blink::WebLayerImpl* m_rootLayer;
+    CompositingLayer* m_rootCCLayer;
 
     blink::IntSize m_deviceViewportSize;
     blink::IntRect m_clientRect;
@@ -188,8 +218,9 @@ private:
     float m_minimum;
     float m_maximum;
 
-    bool m_needsFullTreeSync;
+    //bool m_needsFullTreeSync;
     bool m_needTileRender;
+    bool m_layerTreeDirty; // 需要WebPageImpl.recordDraw
 
     int m_3dNodesCount;
 
@@ -201,43 +232,48 @@ private:
 
     WTF::HashMap<int, cc_blink::WebLayerImpl*> m_liveLayers;
 
-	WTF::Mutex* m_rasterNotifMutex;
+    WTF::Mutex* m_rasterNotifMutex;
     WTF::Vector<DirtyLayers*> m_dirtyLayersGroup;
-	WTF::Vector<Tile*> m_tilesToUIThreadRelease;
+    WTF::Vector<Tile*> m_tilesToUIThreadRelease;
 
-	ActionsFrameGroup* m_actionsFrameGroup;
+    ActionsFrameGroup* m_actionsFrameGroup;
     WTF::Vector<LayerChangeAction*> m_actions;
     WTF::HashMap<int, CompositingLayer*> m_liveCCLayers;
     //////////////////////////////////////////////////////////////////////////
     blink::WebThread* m_compositeThread;
     WTF::Mutex m_compositeMutex;
     SkCanvas* m_memoryCanvas;
-    //SkCanvas* m_memoryCanvasForUi;
-    //SkCanvas* m_memoryCanvasInUiThread;
 
-    double m_lastDrawTime;
+    double m_lastCompositeTime;
+    double m_lastPaintTime;
+    mutable double m_lastRecordTime;
+    double m_drawMinInterval;
 
     static const int m_paintMessageQueueSize = 200;
-    Vector<blink::IntRect> m_dirtyRects;
+    Vector<SkRect> m_dirtyRectsForComposite;
+    Vector<SkRect> m_dirtyRectsForUi;
     int m_postpaintMessageCount;
     int m_drawFrameCount;
     int m_drawFrameFinishCount;
     int m_requestApplyActionsCount;
     int m_requestApplyActionsFinishCount;
-    bool m_useLayeredBuffer;
+    //bool m_useLayeredBuffer;
 
     struct WrapSelfForUiThread {
         WrapSelfForUiThread(LayerTreeHost* host)
             : m_host(host) { }
         LayerTreeHost* m_host;
-        void paintToMemoryCanvasInUiThread(const blink::IntRect& paintRect);
+        void paintInUiThread();
+        void endPaint();
     };
     friend WrapSelfForUiThread;
-    std::set<WrapSelfForUiThread*> m_wrapSelfForUiThreads;
+    WTF::HashSet<WrapSelfForUiThread*> m_wrapSelfForUiThreads;
     int m_paintToMemoryCanvasInUiThreadTaskCount;
 
     bool m_isDrawDirty;
     bool m_hasResize;
+
+    WTF::Vector<SkRect> m_pendingRepaintRectsInRootLayerCoordinate;
 };
 
 } // cc

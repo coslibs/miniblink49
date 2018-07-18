@@ -62,6 +62,17 @@ public:
 
     void close();
 
+    static void gcAll();
+    void gc();
+
+    void onDocumentReady();
+
+    void setNeedAutoDrawToHwnd(bool b);
+
+    static void connetDevTools(WebPage* frontEnd, WebPage* embedder);
+    bool isDevtoolsConneted() const;
+    void inspectElementAt(int x, int y);
+
     void loadURL(int64 frameId, const wchar_t* url, const blink::Referrer& referrer, const wchar_t* extraHeaders);
     void loadRequest(int64 frameId, const blink::WebURLRequest& request);
     void loadHTMLString(int64 frameId, const blink::WebData& html, const blink::WebURL& baseURL, const blink::WebURL& unreachableURL = blink::WebURL(), bool replace = false);
@@ -86,22 +97,24 @@ public:
 
     int getCursorInfoType() const;
 
-	blink::IntSize viewportSize() const;
+    blink::IntSize viewportSize() const;
     void setViewportSize(const blink::IntSize& size);
 
-	blink::IntRect caretRect();
+    blink::IntRect caretRect();
 
     void repaintRequested(const blink::IntRect& windowRect);
 
     void setIsDraggableRegionNcHitTest();
+
+    void setDrawMinInterval(double drawMinInterval);
 
     void setNeedsCommit();
     bool needsCommit() const;
     bool isDrawDirty() const;
 
     HWND getHWND() const;
-	void setHWND(HWND hwnd);
-	void setHwndRenderOffset(const blink::IntPoint& offset);
+    void setHWND(HWND hwnd);
+    void setHwndRenderOffset(const blink::IntPoint& offset);
     blink::IntPoint getHwndRenderOffset() const;
     void setBackgroundColor(COLORREF c);
 
@@ -109,22 +122,43 @@ public:
     void goBack();
     bool canGoForward();
     void goForward();
-    void didCommitProvisionalLoad(blink::WebLocalFrame* frame, const blink::WebHistoryItem& history, blink::WebHistoryCommitType type);
+    void goToOffset(int offset);
+    void goToIndex(int index);
+
+    void didCommitProvisionalLoad(blink::WebLocalFrame* frame,
+        const blink::WebHistoryItem& history, blink::WebHistoryCommitType type, bool isSameDocument);
+
+    void setTransparent(bool transparent);
 
     HDC viewDC();
     void paintToBit(void* bits, int pitch);
+
+    void disablePaint();
+    void enablePaint();
+
+    void willEnterDebugLoop();
+    void didExitDebugLoop();
+
+    void didStartProvisionalLoad();
+
+    void setScreenInfo(const blink::WebScreenInfo& info);
+    blink::WebScreenInfo screenInfo();
+
 #if (defined ENABLE_CEF) && (ENABLE_CEF == 1)
     CefBrowserHostImpl* browser();
     void setBrowser(CefBrowserHostImpl* browserImpl);
 #endif
-	blink::WebViewImpl* webViewImpl();
-	blink::WebFrame* mainFrame();
+
+    blink::WebViewImpl* webViewImpl();
+    blink::WebFrame* mainFrame();
 
     static WebPage* getSelfForCurrentContext();
 
     WebFrameClientImpl* webFrameClientImpl();
 
-	blink::WebFrame* getWebFrameFromFrameId(int64 frameId);
+    blink::WebFrame* getWebFrameFromFrameId(int64_t frameId);
+    int64_t getFrameIdByBlinkFrame(const blink::WebFrame* frame);
+    static int64_t getFirstFrameId();
 
     // kMainFrameId must be -1 to align with renderer expectations.
     static const int64 kMainFrameId = -1;

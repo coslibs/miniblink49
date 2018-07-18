@@ -6,9 +6,6 @@
 #include "src/compiler/graph.h"
 #include "src/compiler/instruction.h"
 #include "src/compiler/schedule.h"
-#if USING_VC6RT == 1
-#include <ostreamvc6.h>
-#endif
 
 namespace v8 {
 namespace internal {
@@ -545,6 +542,7 @@ static InstructionBlock* InstructionBlockFor(Zone* zone,
 InstructionBlocks* InstructionSequence::InstructionBlocksFor(
     Zone* zone, const Schedule* schedule) {
   InstructionBlocks* blocks = zone->NewArray<InstructionBlocks>(1);
+  //zero
   new (blocks) InstructionBlocks(
       static_cast<int>(schedule->rpo_order()->size()), NULL, zone);
   size_t rpo_number = 0;
