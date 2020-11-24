@@ -25,7 +25,8 @@ void WebviewPluginImpl::staticDidCreateScriptContextCallback(wkeWebView webView,
 
     BlinkMicrotaskSuppressionHandle handle = nodeBlinkMicrotaskSuppressionEnter(contextV8->GetIsolate());
 
-    self->m_nodeBinding = new NodeBindings(false, ThreadCall::getBlinkLoop());
+    self->m_nodeBinding = new NodeBindings(false);
+    self->m_nodeBinding->setUvLoop(ThreadCall::getBlinkLoop());
     node::Environment* env = self->m_nodeBinding->createEnvironment(contextV8);
     self->m_nodeBinding->loadEnvironment();
 
@@ -225,6 +226,8 @@ void WebviewPluginImpl::setPreloadURL(const std::string& preload) {
     if (preloadURL.size() > 9 && "file:///" == preloadURL.substr(0, 8))
         preloadURL = preloadURL.substr(8);
     
+    if (m_preloadcode)
+        delete m_preloadcode;
     m_preloadcode = new std::string("require('");
     m_preloadcode->append(preloadURL);
     m_preloadcode->append("');");

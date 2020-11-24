@@ -2,7 +2,6 @@
 
 #include "browser/api/WindowInterface.h"
 #include "browser/api/WindowList.h"
-
 #include "wke.h"
 #include "common/ThreadCall.h"
 #include "common/NodeRegisterHelp.h"
@@ -13,6 +12,10 @@
 #include "gin/dictionary.h"
 #include "gin/object_template_builder.h"
 #include "base/values.h"
+#include "node/src/node.h"
+#include "node/src/env.h"
+#include "node/src/env-inl.h"
+#include "node/uv/include/uv.h"
 
 namespace atom {
 
@@ -102,6 +105,7 @@ void WebContents::init(v8::Isolate* isolate, v8::Local<v8::Object> target, node:
     gin::Dictionary webContentsClass(isolate, prototype->GetFunction());
     webContentsClass.SetMethod("getFocusedWebContents", &WebContents::getFocusedWebContentsApi);
     webContentsClass.SetMethod("getAllWebContents", &WebContents::getAllWebContentsApi);
+    webContentsClass.SetMethod("fromId", &WebContents::fromIdApi);
 
     constructor.Reset(isolate, prototype->GetFunction());
     target->Set(v8::String::NewFromUtf8(isolate, "WebContents"), prototype->GetFunction());
@@ -128,7 +132,7 @@ WebContents::WebContents(v8::Isolate* isolate, v8::Local<v8::Object> wrapper) {
     m_id = IdLiveDetect::get()->constructed(this);
     m_view = nullptr;
     int id = m_id;
-    m_ua = wkeGetUserAgent(nullptr);
+    
 
     gin::Wrappable<WebContents>::InitWith(isolate, wrapper);
 
@@ -137,6 +141,7 @@ WebContents::WebContents(v8::Isolate* isolate, v8::Local<v8::Object> wrapper) {
         if (!IdLiveDetect::get()->isLive(id))
             return;
 
+        self->m_ua = wkeGetUserAgent(nullptr);
         self->m_view = wkeCreateWebView();
         wkeSetUserKeyValue(self->m_view, "WebContents", self);
     });
@@ -179,7 +184,6 @@ void WebContents::removeObserver(WebContentsObserver* observer) {
     m_observers.erase(it);
 }
 
-// new方法
 void WebContents::newFunction(const v8::FunctionCallbackInfo<v8::Value>& args) {
     v8::Isolate* isolate = args.GetIsolate();
     if (args.IsConstructCall()) {
@@ -199,14 +203,16 @@ void WebContents::newFunction(const v8::FunctionCallbackInfo<v8::Value>& args) {
 }
 
 void WebContents::onNewWindowInBlinkThread(int width, int height, const CreateWindowParam* createWindowParam) {
+    wkeWebView webView = getWkeView();
     if (createWindowParam->transparent)
-        wkeSetTransparent(getWkeView(), true);
+        wkeSetTransparent(webView, true);
     wkeSettings settings;
     settings.mask = WKE_SETTING_PAINTCALLBACK_IN_OTHER_THREAD;
     wkeConfigure(&settings);
-    wkeResize(getWkeView(), width, height);
-    wkeOnDidCreateScriptContext(getWkeView(), &WebContents::staticDidCreateScriptContextCallback, this);
-    wkeOnWillReleaseScriptContext(getWkeView(), &WebContents::staticOnWillReleaseScriptContextCallback, this);
+    wkeSetDebugConfig(nullptr, "paintcallbackInOtherThread", nullptr);
+    wkeResize(webView, width, height);
+    wkeOnDidCreateScriptContext(webView, &WebContents::staticDidCreateScriptContextCallback, this);
+    wkeOnWillReleaseScriptContext(webView, &WebContents::staticOnWillReleaseScriptContextCallback, this);
 }
 
 void WebContents::staticDidCreateScriptContextCallback(wkeWebView webView, wkeWebFrameHandle param, wkeWebFrameHandle frame, void* context, int extensionGroup, int worldId) {
@@ -218,8 +224,11 @@ void WebContents::onDidCreateScriptContext(wkeWebView webView, wkeWebFrameHandle
     if (m_nodeBinding || !wkeIsMainFrame(webView, frame) || !m_isNodeIntegration)
         return;
 
+    const utf8* script = "window.Notification = function(){};";
+    wkeRunJsByFrame(webView, frame, script, false);
     BlinkMicrotaskSuppressionHandle handle = nodeBlinkMicrotaskSuppressionEnter((*context)->GetIsolate());
-    m_nodeBinding = new NodeBindings(false, ThreadCall::getBlinkLoop());
+    m_nodeBinding = new NodeBindings(false);
+    m_nodeBinding->setUvLoop(ThreadCall::getBlinkLoop());
     node::Environment* env = m_nodeBinding->createEnvironment(*context);
     m_nodeBinding->loadEnvironment();
     nodeBlinkMicrotaskSuppressionLeave(handle);
@@ -232,8 +241,7 @@ void WebContents::staticOnWillReleaseScriptContextCallback(wkeWebView webView, v
 
 void WebContents::onWillReleaseScriptContextCallback(wkeWebView webView, wkeWebFrameHandle frame, v8::Local<v8::Context>* context, int worldId) {
     node::Environment* env = node::Environment::GetCurrent(*context);
-
-    if (env)
+    if (env && node::IsLiveObj((intptr_t)env))
         mate::emitEvent(env->isolate(), env->process_object(), "exit");
 
     delete m_nodeBinding;
@@ -357,6 +365,35 @@ void WebContents::getAllWebContentsApi(const v8::FunctionCallbackInfo<v8::Value>
     info.GetReturnValue().Set(results);
 }
 
+void WebContents::fromIdApi(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (1 != info.Length())
+        return;
+    v8::Local<v8::Value> arg0 = info[0];
+    if (!arg0->IsInt32())
+        return;
+
+    int32_t id = arg0->Int32Value();
+
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    WindowList* lists = WindowList::getInstance();
+
+    WebContents* findedContent = nullptr;
+    for (WindowList::iterator it = lists->begin(); it != lists->end(); ++it) {
+        WebContents* content = (*it)->getWebContents();
+        if ((int32_t)content != id)
+            continue;
+        findedContent = content;
+        break;
+    }
+    if (!findedContent) {
+        info.GetReturnValue().Set(v8::Null(isolate));
+        return;
+    }
+
+    v8::Local<v8::Value> result = v8::Local<v8::Value>::New(isolate, findedContent->GetWrapper(isolate));
+    info.GetReturnValue().Set(result);
+}
+
 int WebContents::getIdApi() const {
     return (int)this;
 }
@@ -409,8 +446,6 @@ static std::string* trimUrl(const std::string& url) {
         if (c != '/')
             str->insert(str->begin() + invalideHeadLength, 1, '/');
     }
-
-    
 
     return str;
 }
@@ -519,7 +554,7 @@ void WebContents::setUserAgentApi(const std::string userAgent) {
     std::string* str = new std::string(userAgent);
     m_ua = userAgent;
 
-    ThreadCall::callBlinkThreadSync([self, str, id] {
+    ThreadCall::callBlinkThreadAsync([self, str, id] {
         if (IdLiveDetect::get()->isLive(id))
             wkeSetUserAgent(self->m_view, str->c_str());
         delete str;
@@ -803,8 +838,8 @@ v8::Local<v8::Value> WebContents::getOwnerBrowserWindowApi() {
     return v8::Null(isolate());
 }
 
-void WebContents::hasServiceWorkerApi() {
-    //todo
+bool WebContents::hasServiceWorkerApi() {
+    return false;
 }
 
 void WebContents::unregisterServiceWorkerApi() {

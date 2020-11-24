@@ -3,10 +3,15 @@
 // found in the LICENSE file.
 
 #include "node/nodeblink.h"
+#include "node/src/node.h"
+#include "node/src/env.h"
+#include "node/src/env-inl.h"
+#include "node/uv/include/uv.h"
 #include "node/src/node_buffer.h"
 #include "common/NodeRegisterHelp.h"
 #include "common/api/ApiNativeImage.h"
 #include "common/asar/AsarUtil.h"
+#include "common/InitGdiPlus.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
 #include "gin/dictionary.h"
@@ -23,66 +28,10 @@ using std::min;
 #include <vector>
 
 namespace atom {
-
-CLSID s_bmpClsid = { 0 };
-CLSID s_jpgClsid = { 0 };
-CLSID s_pngClsid = { 0 };
-static bool s_bInitClsid = false;
-
-static int getEncoderClsid(const WCHAR* format, CLSID* pClsid) {
-    UINT  num = 0;          // number of image encoders
-    UINT  size = 0;         // size of the image encoder array in bytes
-
-    Gdiplus::ImageCodecInfo* pImageCodecInfo = NULL;
-
-    Gdiplus::GetImageEncodersSize(&num, &size);
-    if (size == 0)
-        return -1;  // Failure
-
-    pImageCodecInfo = (Gdiplus::ImageCodecInfo*)(malloc(size));
-    if (pImageCodecInfo == NULL)
-        return -1;  // Failure
-
-    GetImageEncoders(num, size, pImageCodecInfo);
-
-    for (UINT j = 0; j < num; ++j) {
-        if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0) {
-            *pClsid = pImageCodecInfo[j].Clsid;
-            free(pImageCodecInfo);
-            return j;  // Success
-        }
-    }
-
-    free(pImageCodecInfo);
-    return -1;  // Failure
-}
-
-bool initGDIPlusClsids() {
-    if (s_bInitClsid)
-        return true;
-
-    static ULONG_PTR g_nGdiplusToken = 0;
-    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
-    Gdiplus::GdiplusStartup(&g_nGdiplusToken, &gdiplusStartupInput, NULL);
-
-    s_bInitClsid = true;
-
-    if (-1 == getEncoderClsid(L"image/bmp", &s_bmpClsid))
-        return false;
-
-    if (-1 == getEncoderClsid(L"image/jpeg", &s_jpgClsid))
-        return false;
-
-    if (-1 == getEncoderClsid(L"image/png", &s_pngClsid))
-        return false;
-
-    return true;
-}
-
+    
 NativeImage::NativeImage(v8::Isolate* isolate, v8::Local<v8::Object> wrapper) {
     m_gdipBitmap = nullptr;
     gin::Wrappable<NativeImage>::InitWith(isolate, wrapper);
-    initGDIPlusClsids();
 }
 
 void NativeImage::init(v8::Isolate* isolate, v8::Local<v8::Object> target) {
@@ -220,7 +169,7 @@ void NativeImage::createFromPathApi(const v8::FunctionCallbackInfo<v8::Value> in
         path = *pathString;
     }
 
-    if (0 == path.size() && !asar::ReadFileToString(base::UTF8ToWide(path).c_str(), &fileContents))
+    if (0 == path.size() || !asar::ReadFileToString(base::UTF8ToWide(path).c_str(), &fileContents))
         return;
 
     const unsigned char* data = reinterpret_cast<const unsigned char*>(fileContents.data());

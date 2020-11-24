@@ -518,7 +518,13 @@ bool getProperty(NPObject *obj, NPIdentifier propertyName, NPVariant *result) {
 
 //NPP Functions Implements
 NPError NPP_New(NPMIMEType pluginType, NPP instance, uint16_t mode, int16_t argc, char* argn[], char* argv[], NPSavedData* saved) {
-    wkeWebView webview = wkeGetWebviewByNData(instance->ndata);
+    bool b = (0 == strcmp(pluginType, "application/browser-plugin"));
+    if (b && !instance)
+        return NPERR_NO_ERROR;
+    else if (!b)
+        return NPERR_INVALID_PLUGIN_ERROR;
+
+    wkeWebView webview = wkeGetWebViewByNData(instance->ndata);
     WebviewPluginImpl* impl = new WebviewPluginImpl(webview);
     instance->pdata = impl;
 

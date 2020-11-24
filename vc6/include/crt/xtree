@@ -355,12 +355,12 @@ public:
         else if (_P == begin())
         {
             if (key_compare(_Kfn()(_V), _Key(_P._Mynode())))
-                return (_Insert(_Head, _P._Mynode(), value_type(_V)));
+                return (_Insert(_Head, _P._Mynode(), forward<_Ty>(value_type(_V))));
         }
         else if (_P == end())
         {
             if (key_compare(_Key(_Rmost()), _Kfn()(_V)))
-                return (_Insert(_Nil, _Rmost(), value_type(_V)));
+                return (_Insert(_Nil, _Rmost(), forward<_Ty>(value_type(_V))));
         }
         else
         {
@@ -369,12 +369,12 @@ public:
                 && key_compare(_Kfn()(_V), _Key(_P._Mynode())))
             {
                 if (_Right(_Pb._Mynode()) == _Nil)
-                    return (_Insert(_Nil, _Pb._Mynode(), value_type(_V)));
+                    return (_Insert(_Nil, _Pb._Mynode(), forward<_Ty>(value_type(_V))));
                 else
-                    return (_Insert(_Head, _P._Mynode(), value_type(_V)));
+                    return (_Insert(_Head, _P._Mynode(), forward<_Ty>(value_type(_V))));
             }
         }
-        return (insert(value_type(_V)).first);
+        return (insert(forward<_Ty>(value_type(_V))).first);
     }
     void insert(iterator _F, iterator _L)
     {
@@ -669,15 +669,21 @@ protected:
                 _Parent(_Nil) = 0;
                 _Color(_Nil) = _Black;
 
+                if (_Tmp != 0)
+                    _Freenode(_Tmp);
                 _Tmp = 0;
-                _Left(_Nil) = 0, _Right(_Nil) = 0;
+
+                _Left(_Nil) = 0;
+                _Right(_Nil) = 0;
             }
             ++_Nilrefs; 
         }
         if (_Tmp != 0)
             _Freenode(_Tmp);
-        _Head = _Buynode(_Nil, _Red), _Size = 0;
-        _Lmost() = _Head, _Rmost() = _Head;
+        _Head = _Buynode(_Nil, _Red);
+        _Size = 0;
+        _Lmost() = _Head;
+        _Rmost() = _Head;
     }
     iterator _Insert(_Nodeptr _X, _Nodeptr _Y, _Ty&& _V)
     {
@@ -847,8 +853,7 @@ protected:
     }
     _Nodeptr _Buynode(_Nodeptr _Parg, _Redbl _Carg)
     {
-        _Nodeptr _S = (_Nodeptr)allocator._Charalloc(
-            1 * sizeof(_Node));
+        _Nodeptr _S = (_Nodeptr)allocator._Charalloc(1 * sizeof(_Node));
         _Parent(_S) = _Parg;
         _Color(_S) = _Carg;
         return (_S);
